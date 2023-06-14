@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
+use std::fmt;
 use std::result::Result;
 
 use crate::HttpHeaderError;
@@ -24,6 +25,8 @@ pub enum Header {
     Accept,
     /// Header `Accept-Encoding`
     AcceptEncoding,
+    /// Header `Server-Timing`
+    ServerTiming,
 }
 
 impl Header {
@@ -37,6 +40,7 @@ impl Header {
             Self::Server => b"Server",
             Self::Accept => b"Accept",
             Self::AcceptEncoding => b"Accept-Encoding",
+            Self::ServerTiming => b"Server-Timing",
         }
     }
 
@@ -57,6 +61,7 @@ impl Header {
                 "server" => Ok(Self::Server),
                 "accept" => Ok(Self::Accept),
                 "accept-encoding" => Ok(Self::AcceptEncoding),
+                "server-timing" => Ok(Self::ServerTiming),
                 invalid_key => Err(RequestError::HeaderError(HttpHeaderError::UnsupportedName(
                     invalid_key.to_string(),
                 ))),
@@ -207,6 +212,7 @@ impl Headers {
                             )),
                         },
                         Header::Server => Ok(()),
+                        Header::ServerTiming => Err(RequestError::HeaderError(HttpHeaderError::UnsupportedName(entry[0].to_string()))),
                         Header::AcceptEncoding => Encoding::try_from(entry[1].trim().as_bytes()),
                     }
                 } else {
@@ -422,6 +428,53 @@ impl MediaType {
             Self::PlainText => "text/plain",
             Self::ApplicationJson => "application/json",
         }
+    }
+}
+
+/// Struct implementing a single entry of the Server-Timing response header
+///
+/// See https://www.w3.org/TR/server-timing/
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ServerTiming {
+    /// The name of the metric measured
+    pub name: &'static str,
+
+    /// The duration, in milliseconds
+    pub dur: f64,
+
+    /// A short description of the metric
+    pub desc: Option<&'static str>,
+}
+
+impl ServerTiming {
+    pub fn new(name: &'static str, dur: f64) -> ServerTiming {
+        ServerTiming {
+            name,
+            dur,
+            desc: None,
+        }
+    }
+
+    pub fn with_description(name: &'static str, dur: f64, desc: &'static str) -> ServerTiming {
+        ServerTiming {
+            name,
+            dur,
+            desc: Some(desc),
+        }
+    }
+}
+
+impl fmt::Display for ServerTiming {
+    /// Formats this [`ServerTiming`] instance in accordance with the `Server-Timing` head
+    /// specification
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.name)?;
+
+        if let Some(ref desc) = self.desc {
+            write!(f, ";desc=\"{}\"", desc)?;
+        }
+
+        write!(f, ";dur={:.2}", self.dur)
     }
 }
 
@@ -783,5 +836,24 @@ mod tests {
 
         headers.set_accept(MediaType::ApplicationJson);
         assert_eq!(headers.accept(), MediaType::ApplicationJson);
+    }
+
+    #[test]
+    fn test_server_timing() {
+        let server_timing = ServerTiming {
+            name: "app",
+            dur: 10.023,
+            desc: None,
+        };
+
+        assert_eq!(server_timing.to_string(), "app;dur=10.02");
+
+        let server_timing = ServerTiming {
+            name: "something",
+            dur: 34.0,
+            desc: Some("sth"),
+        };
+
+        assert_eq!(server_timing.to_string(), "something;desc=\"sth\";dur=34.00");
     }
 }

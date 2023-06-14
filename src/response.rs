@@ -5,6 +5,7 @@ use std::io::{Error as WriteError, Write};
 
 use crate::ascii::{COLON, CR, LF, SP};
 use crate::common::{Body, Version};
+use crate::common::headers::ServerTiming;
 use crate::headers::{Header, MediaType};
 use crate::Method;
 
@@ -92,6 +93,7 @@ pub struct ResponseHeaders {
     server: String,
     allow: Vec<Method>,
     accept_encoding: bool,
+    server_timing: Vec<ServerTiming>
 }
 
 impl Default for ResponseHeaders {
@@ -103,6 +105,7 @@ impl Default for ResponseHeaders {
             server: String::from("Firecracker API"),
             allow: Vec::new(),
             accept_encoding: false,
+            server_timing: Vec::new(),
         }
     }
 }
@@ -170,6 +173,21 @@ impl ResponseHeaders {
             }
         }
 
+        if !self.server_timing.is_empty() {
+            buf.write_all(Header::ServerTiming.raw())?;
+            buf.write_all(&[COLON, SP])?;
+
+            let mut first = true;
+            for timing in &self.server_timing {
+                if !first {
+                    buf.write_all(b", ")?;
+                }
+                buf.write_all(timing.to_string().as_bytes())?;
+                first = false;
+            }
+            buf.write_all(&[CR, LF])?;
+        }
+
         buf.write_all(&[CR, LF])
     }
 
@@ -199,6 +217,12 @@ impl ResponseHeaders {
     #[allow(unused)]
     pub fn set_encoding(&mut self) {
         self.accept_encoding = true;
+    }
+
+    /// Adds the given [`ServerTiming`] to the set of timings contained in this [`ResponseHeaders`]
+    /// instance
+    pub fn add_timing(&mut self, timing: ServerTiming) {
+        self.server_timing.push(timing);
     }
 }
 
@@ -262,6 +286,12 @@ impl Response {
     /// Allows a specific HTTP method.
     pub fn allow_method(&mut self, method: Method) {
         self.headers.allow.push(method);
+    }
+
+    /// Adds the given [`ServerTiming`] to the set of timings reported in this [`Response`]'s
+    /// `Server-Timing` header.
+    pub fn add_timing(&mut self, timing: ServerTiming) {
+        self.headers.add_timing(timing)
     }
 
     fn write_body<T: Write>(&self, mut buf: T) -> Result<(), WriteError> {
@@ -331,6 +361,8 @@ mod tests {
         response.set_body(Body::new(body));
         response.set_content_type(MediaType::PlainText);
         response.set_encoding();
+        response.add_timing(ServerTiming::new("app", 1.43));
+        response.add_timing(ServerTiming::with_description("app2", 34.23, "test"));
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.body().unwrap(), Body::new(body));
@@ -343,10 +375,11 @@ mod tests {
             Connection: keep-alive\r\n\
             Content-Type: text/plain\r\n\
             Content-Length: 14\r\n\
-            Accept-Encoding: identity\r\n\r\n\
+            Accept-Encoding: identity\r\n\
+            Server-Timing: app;dur=1.43, app2;desc=\"test\";dur=34.23\r\n\r\n\
             This is a test";
 
-        let mut response_buf: [u8; 153] = [0; 153];
+        let mut response_buf: [u8; 210] = [0; 210];
         assert!(response.write_all(&mut response_buf.as_mut()).is_ok());
         assert_eq!(response_buf.as_ref(), expected_response);
 
